@@ -4,27 +4,43 @@ import pdfplumber
 import os
 from langchain_community.llms import Ollama  # Assuming Ollama is available through langchain_community
 
+
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 
 # Initialize Ollama
 llm = Ollama(model="llama2")
 
 def extract_text_from_pdf(pdf_path):
-    """Extracts all text from a PDF file using pdfplumber."""
+    """Extracts text and tables from a PDF file using pdfplumber."""
     try:
         text = ""
+        tables = []
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
+                # Extract text from the page
                 page_text = page.extract_text()
                 if page_text:
-                    text += f"Page {page_num + 1}:\n{page_text}\n"
+                    text += f"Page {page_num + 1} Text:\n{page_text}\n"
                 else:
                     print(f"Warning: No text found on page {page_num + 1}")
-        return text.strip()
+                
+                # Extract tables from the page
+                page_tables = page.extract_tables()
+                if page_tables:
+                    for table in page_tables:
+                        table_str = "\n".join(
+                            ["\t".join(cell if cell is not None else "" for cell in row) for row in table]
+                        )
+                        tables.append(f"Page {page_num + 1} Table:\n{table_str}\n")
+        
+        # Combine text and tables
+        full_text = text + "\n\n".join(tables)
+        return full_text.strip()
     except Exception as e:
         print(f"Error extracting text from PDF: {e}")
         return ""
 
+        
 @app.route('/analyze', methods=['POST'])
 def analyze_pdf():
     file = request.files['file']
@@ -32,15 +48,19 @@ def analyze_pdf():
     pdf_path = f"/tmp/{file.filename}"
     file.save(pdf_path)
     
-    # Extract text from the PDF
+    # Extract and clean the text from the PDF
     text = extract_text_from_pdf(pdf_path)
     
-    # Print extracted text for debugging
+    # Verify that the extracted text is being printed for debugging
     print("Extracted Text:")
     print(text)
     
-    # Feed the document text to Ollama and ask the question
-    ollama_input = f"Document:\n{text}\n\nQuestion: {question}"
+    # Condense the extracted text if necessary
+    if len(text) > 3000:  # Adjust this threshold based on your needs
+        text = text[:3000] + "\n... (content truncated for brevity)"
+
+    # Structure the input more clearly for the model
+    ollama_input = f"Please read the following document content and answer the specific question provided:\n\nDocument Content:\n{text}\n\nQuestion: {question}\nAnswer:"
     
     # Invoke Ollama with the input text
     ollama_response = llm.invoke(ollama_input)
@@ -53,6 +73,8 @@ def analyze_pdf():
         answer = ollama_response or "No relevant answer found"
     
     return jsonify({"answer": answer})
+
+
 
 @app.route('/')
 def serve_frontend():
